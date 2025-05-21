@@ -10,78 +10,95 @@ import CoreData
 
 struct ContentView: View {
     @Environment(\.managedObjectContext) private var viewContext
-
+    @State private var showingAddTodo = false
+    @State private var selectedGroup: PriorityGroup? = .today
+    
     @FetchRequest(
-        sortDescriptors: [NSSortDescriptor(keyPath: \Item.timestamp, ascending: true)],
+        sortDescriptors: [
+            NSSortDescriptor(keyPath: \TodoItem.priorityGroup, ascending: true),
+            NSSortDescriptor(keyPath: \TodoItem.isCompleted, ascending: true),
+            NSSortDescriptor(keyPath: \TodoItem.createdAt, ascending: true)
+        ],
         animation: .default)
-    private var items: FetchedResults<Item>
-
+    private var todos: FetchedResults<TodoItem>
+    
+    private var groupedTodos: [PriorityGroup: [TodoItem]] {
+        Dictionary(grouping: todos) { todo in
+            PriorityGroup(rawValue: todo.priorityGroup ?? "whenPossible") ?? .whenPossible
+        }
+    }
+    
+    private func sortedTodos(for group: PriorityGroup) -> [TodoItem] {
+        let todosInGroup = groupedTodos[group] ?? []
+        return todosInGroup.sorted { todo1, todo2 in
+            if todo1.isCompleted != todo2.isCompleted {
+                return !todo1.isCompleted
+            }
+            return (todo1.createdAt ?? Date()) < (todo2.createdAt ?? Date())
+        }
+    }
+    
     var body: some View {
-        NavigationView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp!, formatter: itemFormatter)")
-                    } label: {
-                        Text(item.timestamp!, formatter: itemFormatter)
+        NavigationSplitView {
+            List(PriorityGroup.allCases, id: \.self, selection: $selectedGroup) { group in
+                NavigationLink(value: group) {
+                    HStack {
+                        Circle()
+                            .fill(group.color)
+                            .frame(width: 10, height: 10)
+                        Text(group.title)
+                        Spacer()
+                        let count = groupedTodos[group]?.filter { !$0.isCompleted }.count ?? 0
+                        if count > 0 {
+                            Text("\(count)")
+                                .foregroundColor(.white)
+                                .font(.caption)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(group.color)
+                                .clipShape(Capsule())
+                        }
                     }
                 }
-                .onDelete(perform: deleteItems)
             }
+            .navigationTitle("Priority Groups")
             .toolbar {
-#if os(iOS)
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-#endif
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: { showingAddTodo = true }) {
+                        Label("Add Todo", systemImage: "plus")
                     }
                 }
             }
-            Text("Select an item")
-        }
-    }
-
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(context: viewContext)
-            newItem.timestamp = Date()
-
-            do {
-                try viewContext.save()
-            } catch {
-                // Replace this implementation with code to handle the error appropriately.
-                // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
-                let nsError = error as NSError
-                fatalError("Unresolved error \(nsError), \(nsError.userInfo)")
+        } detail: {
+            if let selectedGroup = selectedGroup {
+                List {
+                    let todosInGroup = sortedTodos(for: selectedGroup)
+                    if todosInGroup.isEmpty {
+                        ContentUnavailableView("No Tasks", systemImage: "checklist", description: Text("Add some tasks to get started"))
+                    } else {
+                        ForEach(todosInGroup) { todo in
+                            TodoItemView(todo: todo)
+                                .listRowBackground(todo.isCompleted ? Color.gray.opacity(0.1) : selectedGroup.lightColor)
+                        }
+                    }
+                }
+                .navigationTitle(selectedGroup.title)
+                .toolbar {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button(action: { showingAddTodo = true }) {
+                            Label("Add Todo", systemImage: "plus")
+                        }
+                    }
+                }
+            } else {
+                ContentUnavailableView("No Group Selected", systemImage: "sidebar.left", description: Text("Select a priority group"))
             }
         }
-    }
-
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            offsets.map { items[$0] }.forEach(viewContext.delete)
-
-            do {
-                try viewContext.save()
-            } catch {
-                // Replace this implementation with code to handle the error appropriately.
-                // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
-                let nsError = error as NSError
-                fatalError("Unresolved error \(nsError), \(nsError.userInfo)")
-            }
+        .sheet(isPresented: $showingAddTodo) {
+            AddTodoView(initialGroup: selectedGroup ?? .whenPossible)
         }
     }
 }
-
-private let itemFormatter: DateFormatter = {
-    let formatter = DateFormatter()
-    formatter.dateStyle = .short
-    formatter.timeStyle = .medium
-    return formatter
-}()
 
 #Preview {
     ContentView().environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
